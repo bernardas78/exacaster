@@ -1,0 +1,393 @@
+Mobile operator X: data analysis, segmentation, and churn prediction
+========================================================
+author: Bernardas Ciapas
+date: 2015-09-16
+[bernardasc@hotmail.com](bernardasc@hotmail.com)
+```{r echo=FALSE, cache=TRUE}
+#load the data: 2 sheets: usage in (Jun-Aug) and churn in Sept
+setwd("C:/labs/exacaster");
+if (!exists("usage")){
+    require(RODBC);
+    conn <- odbcConnectExcel2007( file.path(getwd(), "Churn prediction data.xlsb"));
+    usage <- sqlFetch(conn, sub("'(.*)\\$'", "\\1", sqlTables(conn)$TABLE_NAME)[3]); # read 1st sheet in the table name list
+    churn <- sqlFetch(conn, sub("'(.*)\\$'", "\\1", sqlTables(conn)$TABLE_NAME)[1]); # read 2nd sheet in the table name list
+    close(conn);
+    
+}
+```
+
+Data analysis, financial
+========================================================
+- ~25.000 of clients carry EOM balance of less than 2 EUR<br>
+- ~12.000 carry 2-6 EUR
+
+```{r echo=FALSE, cache=TRUE}
+usage8 = usage[which(usage$month==8),];
+
+#First figure: 2 histograms (distribution of balanses and avg. call times)
+hist(usage8$user_account_balance_last, 
+     breaks=1000, freq=TRUE, xlim=c(0,100), col="green", density=30, angle=135, border="black",
+     xlab="Ending balance (EUR)", ylab="Count of customers", main="Distribution of customers by month-end balance, August 2013");
+```
+
+Data analysis, financial (continued)
+========================================================
+- Both spendings and EOM balance dropped by ~10% in Aug, 2013<br>
+- Over 75% of customers carry balance bellow 15 EUR
+```{r echo=FALSE, cache=TRUE, fig.width=16, fig.height=9 }
+avgbymonth <-aggregate(usage,by=list(usage$year,usage$month),FUN=mean, na.rm=TRUE)
+require(reshape2)
+require(ggplot2)
+
+avgbymonthm <- melt(avgbymonth[,c('month','user_spendings','user_account_balance_last')],id.vars=1)
+#rename columns so they show up properly formatted in legend
+avgbymonthm$variable <- gsub("_", " ", avgbymonthm$variable)
+#require(dplyr)
+#avgbymonthm <- mutate(avgbymonthm, month = month.abb[month])
+#class(avgbymonthm$month) <- factor(avgbymonthm$month, levels=c("Jun","Jul","Aug"))
+
+p1 <- ggplot(avgbymonthm,aes(x = month,y = value)) + 
+    geom_bar(aes(fill = variable),stat="identity",position = "dodge") +
+    xlab ("Month of 2013") + 
+    ylab("Amount (EUR)") +
+    scale_fill_manual("Measures",values=c("orange","red")) +
+    ggtitle("Average spending and ending balance, Jun-Aug of 2013")
+
+#in order to fit all the data to y scale (0,20), add an extra var
+usage$user_account_balance_last_upto20 <- ifelse(usage$user_account_balance_last >20, 20, usage$user_account_balance_last)
+p2 <- ggplot(usage, aes(x=as.factor(month), y=user_account_balance_last_upto20)) + geom_boxplot() +
+    xlab ("Month of 2013") +
+    ylab("Balance (EUR)") +
+    ggtitle("Ending balance (25% percentile, average, 75% percentile), Jun-Aug of 2013") +
+    scale_y_continuous(limits = c(0, 20))
+usage$user_account_balance_last_upto20 <-NULL
+
+require(gridExtra)
+grid.arrange(p1, p2, ncol=2)
+#multiplot(p1, p2, cols=2)
+```
+
+Data analysis, service usage
+========================================================
+- ~75% of customers had average call duration bellow 1 minute<br>
+- ~5% averaged over 2 minutes
+```{r echo=FALSE, cache=TRUE}
+hist(usage8$calls_outgoing_duration / usage8$calls_outgoing_count, 
+     breaks=100, freq=FALSE, xlim=c(0,10), col="purple", density=30, angle=135, border="black",
+     xlab="Average call duration (minutes)", ylab="Density of customers", main="Customers distribution by average call length, August 2013");
+```
+
+
+Data analysis, service usage (continued)
+========================================================
+- Average number of calls declined during July and August
+- SMS usage (both in and out) slightly increased in July, but sharply decreased in August<br>
+```{r echo=FALSE, cache=TRUE, fig.width=16}
+avgbymonthmm <- melt(avgbymonth[,c('month','calls_outgoing_count','sms_outgoing_count','sms_incoming_count')],id.vars=1)
+#rename columns so they show up properly formatted in legend
+avgbymonthmm$variable <- gsub("_", " ", avgbymonthmm$variable)
+
+ggplot(avgbymonthmm,aes(x = month,y = value)) + 
+    geom_bar(aes(fill = variable),stat="identity",position = "dodge") +
+    xlab ("Month of 2013") +
+    ylab("Count") +
+    scale_fill_manual("Measures",values=c("purple","orange","blue")) +
+    ggtitle("Averages of number of calls and SMS, Jun-Aug of 2013")
+
+```
+
+Data analysis, churn
+========================================================
+- Increase in churn occurs before service lifetime reaches 3 years (1000 days)
+- Once service lifetime of 3 years is passed - more customer loyalty is observed 
+```{r echo=FALSE, cache=TRUE, fig.width=16}
+sumbyaccid <-aggregate(usage,by=list(usage$user_account_id),FUN=sum, na.rm=TRUE)
+spendingsandchurn <- merge(sumbyaccid,churn,by="user_account_id")
+user_lifetime_mean <- spendingsandchurn$user_lifetime/3
+plot(user_spendings ~ user_lifetime_mean, data=spendingsandchurn, 
+     log="xy",
+     yaxt = "n",  #a way to not display default values on Y label
+     pch=ifelse(churn==1,4,1), 
+     col=ifelse(churn==1,"red","green"),
+     xlab="Customer lifetime (days)", 
+     ylab="Spendings over last 3 months", 
+     main="Churner (red x) or not (green o)? Customer distribution by 3 month spendings and their lifetime")
+axis(2,at=c(0.01,0.1,1,10,100),labels=c(0.01,0.1,1,10,100)) #adding y label values
+```
+
+
+Segmentation
+========================================================
+- Cluster's "A" clients are the biggest SMS users
+- "B" accounts for ~40% of data traffic with a tiny customer base
+- "C" has biggest spendings, could be called VIP
+- "D" is the biggest customer base with under average service usage, i.e. "passives"<br>
+```{r echo=FALSE, cache=TRUE, fig.height=5}
+usgmeans <-aggregate(usage,by=list(usage$user_account_id),FUN=mean, na.rm=TRUE)
+usgmeans[,'Group.1']<-NULL
+
+#remove all columns except what we care about for the graph
+usgmeans<-usgmeans[,c('user_spendings','calls_outgoing_count','sms_outgoing_count','gprs_usage')]
+
+#standardize vars in a separate data frame
+usgmeansstd <-usgmeans
+#take away vars that are not part of clustering
+usgmeansstd$year <-NULL #not sure why, but applying standardization to year caused it to be NaN
+usgmeansstd$month <-NULL 
+usgmeansstd$user_account_id <-NULL 
+for (var in colnames(usgmeansstd)){
+    usgmeansstd[,var] <- (usgmeansstd[,var] - mean(usgmeansstd[,var])) / sd(usgmeansstd[,var])
+}
+
+#usgmeans$Group.1<-NULL
+#cluster into groups using k-means algorithm into 5 groups
+clkmeans <- kmeans(x=usgmeansstd, centers=5)
+##inspect counts per cluster:
+#str(clkmeans)
+
+#add cluster column to the usgmeans frame
+usgmeans <- cbind(usgmeans, clkmeans$cluster)
+colnames(usgmeans)[which(colnames(usgmeans) == 'clkmeans$cluster')] <- 'cluster'
+#add "count" column
+usgmeans$count <- 1
+
+
+#byclustermean <-aggregate(usgmeans,by=list(usgmeans$cluster),FUN=mean, na.rm=TRUE)
+#aggregate sums by cluster
+byclustersum <-aggregate(usgmeans,by=list(usgmeans$cluster),FUN=sum, na.rm=TRUE)
+
+#create 5 vecors (sms, calls, data, revenue, customer base); then form a table from them
+v_sms <- byclustersum$sms_outgoing_count / sum(byclustersum$sms_outgoing_count)
+v_calls <- byclustersum$calls_outgoing_count / sum(byclustersum$calls_outgoing_count)
+v_data <- byclustersum$gprs_usage / sum(byclustersum$gprs_usage)
+v_revenue <- byclustersum$user_spendings / sum(byclustersum$user_spendings)
+v_count <- byclustersum$count / sum(byclustersum$count)
+
+t_segments <- as.table(cbind(v_sms,v_calls,v_data,v_revenue,v_count))
+colnames(t_segments) <- c("SMS %", "Calls %", "Data %", "Revenue %", "% Clients")
+
+#plot a stacked bar chart for each criteria - sms, calls... - for each segment
+barplot(t_segments, main="Customer clusters",
+        yaxt = "n",  #a way to not display default values on Y label
+        xlab="", col=c("yellow","orange","red","purple","blue"),
+        legend = c("A", "B", "C", "D", "E"))
+axis(2,at=c(0.0,0.2,0.4,0.6,0.8,1.0),labels=c("0%","20%","40%","60%","80%","100%")) #adding y label values```
+```
+
+
+Segmentation, cohorts
+========================================================
+- ~20% increase in spendings for newest cohort
+- Older cohorts tend to have lower average monthly spendings<br>
+```{r echo=FALSE, cache=TRUE, fig.height=7}
+#usage$cohort <-NULL
+###Cohorts graph. Divide it to cohorts monthly (1-30, 31-60, 61-90), quarterly (last 2 years) and yearly (earlier)
+usage8 <- usage[which(usage$month==8),c("user_account_id","user_lifetime")];
+usage8$cohort <- paste(
+    format(as.Date("2013-08-31")-usage8$user_lifetime, "%Y"),
+    "-",
+    format(as.Date("2013-08-31")-usage8$user_lifetime, "%m"),
+    " month", sep="")
+#remove cohorts earlier than 2010
+usage8 <- usage8[usage8$cohort>="2011",]
+#combine monthly cohorts of 2012, 2013-06 into quarters
+usg1112 <-usage8$cohort>"2012" & usage8$cohort<"2013-07"
+usage8$cohort[usg1112] <- paste(
+    substr(usage8$cohort[usg1112],1,4),
+    "-0",
+    ceiling(as.numeric(substr(usage8$cohort[usg1112],6,7)) / 3),
+    " quarter", sep="")
+#combine monthly cohorts of <=2011 into years
+usage8$cohort[usage8$cohort < "2012"] <- paste(substr(usage8$cohort[usage8$cohort < "2012"],1,4), "year")
+usage8$user_lifetime <- NULL
+
+#merge cohort back to the original data set
+usgmerged <- merge(usage,usage8)
+
+usgmerged$cohort <- as.factor(usgmerged$cohort)
+t_spendbym <- tapply(usgmerged$user_spendings, list(usgmerged$month, usgmerged$cohort), mean)
+
+#remove data that does not make sense: 
+t_spendbym <-replace (t_spendbym, t_spendbym==0, NaN)
+matplot(t_spendbym, type = c("b"),pch=1,col = rainbow(dim(t_spendbym)[2]), lty=1, lwd=3,
+        xaxt="n",
+        xlab="Month of 2013",
+        ylab="Spendings, EUR",
+        main="Average monthly spendings from cohorts") 
+legend("top", legend=colnames(t_spendbym), col=rainbow(dim(t_spendbym)[2]), pch=19, bty="n", y.intersp=1)
+axis(1,at=c(1,2,3),labels=rownames(t_spendbym)) #adding y label values
+```
+
+Churn prediction
+========================================================
+Model evaluation
+```{r echo=FALSE, cache=TRUE}
+usage8 <- usage[which(usage$month==8),]
+
+usgmerged <- merge(usage8, churn, "user_account_id")
+
+fit <- glm(churn ~ ., data=usgmerged, family="binomial")
+
+pred <- predict(fit, data=usgmerged[-churn,])
+
+#apply sigmoid
+pred <- 1 / (1 + exp(-pred))
+#round to get a binary value from prediction
+pred <- round(pred)
+
+eval <-table(pred, usgmerged$churn)
+
+##this gives 88% 
+#(eval[1,1] + eval[2,2])/sum(eval)
+
+#train separate models for Jun and Jul; take the average of predicted probability of [Jun, Jul, Aug] to estimate churn
+usage6 <- usage[which(usage$month==6),]
+usage7 <- usage[which(usage$month==7),]
+usg6merged <- merge(usage6, churn, "user_account_id")
+usg7merged <- merge(usage7, churn, "user_account_id")
+#train a logistic regression model
+fit6 <- glm(churn ~ ., data=usg6merged, family="binomial")
+fit7 <- glm(churn ~ ., data=usg7merged, family="binomial")
+#predict on the same training data, apply sigmoid
+pred6 <- predict(fit6, data=usg6merged[-churn,])
+pred7 <- predict(fit7, data=usg7merged[-churn,])
+#sigmoid
+pred6 <- 1 / (1 + exp(-pred6))
+pred7 <- 1 / (1 + exp(-pred7))
+
+#merge all predictions of 3 models to a common data set pred678
+pred<-cbind(usgmerged$user_account_id, pred)
+pred6<-cbind(usg6merged$user_account_id, pred6)
+pred7<-cbind(usg7merged$user_account_id, pred7)
+
+colnames(pred)<-c("user_account_id", "pred8")
+colnames(pred6)<-c("user_account_id", "pred6")
+colnames(pred7)<-c("user_account_id", "pred7")
+
+pred678 <- merge(merge(pred6, pred7, all=TRUE), pred, all=TRUE)
+
+
+#some accounts are missing values from months 6, 7. Replace them with average of other months
+missing <-which(is.na(pred678$pred7))
+pred678$pred7[missing] <-pred678$pred8[missing]
+missing <-which(is.na(pred678$pred6))
+pred678$pred6[missing] <-(pred678$pred8[missing] + pred678$pred7[missing]) / 2
+
+#set the average of probabilities and then round to 0 or 1
+pred678$pred <- round((pred678$pred8 + pred678$pred7 + pred678$pred6) / 3)
+
+#compare with actual results
+pred678 <- merge(churn, pred678, by="user_account_id")
+eval678 <- table(pred678$pred, pred678$churn)
+
+##88,3% in-sample accuracy
+#(eval678[1,1] + eval678[2,2])/sum(eval678)
+
+#Since fitting on just August gave very similar results to average over 3 months, I'll use just August's model for evaluating the model
+#divide august's data to test 10% and train 90%. Train a model on August train data, predict and evaluate on August test data
+set.seed(543214)
+tsSample <- sample(nrow(usage8),nrow(usage8)/10,replace=FALSE)
+ts <- usage8[tsSample,]
+tr <- usage8[-tsSample,]
+trmerged <- merge(tr, churn, "user_account_id")
+tsmerged <- merge(ts, churn, "user_account_id")
+
+#remove dependent variables (user_spendings=calls_outgoing_spendings+sms_outgoing_spendings+gprs_spendings),
+#   otherwise it produces crazy coefficients to cancel each other out
+trmerged$user_spendings <-NULL
+
+#train a model on a train set
+fitTr <- glm(churn ~ ., data=trmerged, family="binomial")
+#predit on test set
+predts <- predict(fitTr, newdata=tsmerged)
+#apply sigmoid
+predts <- 1 / (1 + exp(-predts))
+#round to get a binary value from prediction
+predts <- round(predts)
+```
+
+```{r echo=FALSE}
+
+##evaluate the model
+evalts <-table(predts, tsmerged$churn)
+tp <- evalts[2,2] #true positive
+tn <- evalts[1,1] #true negative
+fp <- evalts[2,1] #false positive
+fn <- evalts[1,2] #false negative
+accuracy <- (tn+tp) / (tn+tp+fn+fp)
+sensitivity <- tp / (tp+fn)
+specificity <- tn / (tn+fp)
+positivepredictivevalue <- tp / (tp+fp)
+negativepredictivevalue <- tn / (tn+fn)
+falsepositiverate <- fn / (tp+fn) #type 1 error
+falsenegativerate <- fp / (tn+fp) #type 2 error
+falsediscoveryrate <- fp / (tp+fp)
+
+options(digits=3)
+```
+Model accuracy: `r accuracy`<br>
+Sensitivity: `r sensitivity`<br>
+Specificity: `r specificity`<br>
+Positive Predictive Value: `r positivepredictivevalue`<br>
+Negative Predictive Value: `r negativepredictivevalue`<br>
+False Positive Rate: `r falsepositiverate`<br>
+False Negative Rate: `r falsenegativerate`<br>
+False Discovery Rate: `r falsediscoveryrate`<br>
+
+Churn prediction (continued)
+========================================================
+Most significant variables<br><br>
+- Positive (higher value means more likelihood to churn):
+```{r echo=FALSE}
+#print 3 most important positive vars
+pos<- round(fitTr$coef[head(order(fitTr$coef, decreasing=TRUE), n=3)],2)
+```
+`r  paste(paste(names(pos),":", pos,"<br>"), collapse='')`
+
+- Negative (higher negative value means less likelihood to churn):
+```{r echo=FALSE}
+neg<- round(fitTr$coef[head(order(fitTr$coef, decreasing=FALSE), n=4)],2)
+#remove intercept, which is the highest negative value
+neg<- neg[names(neg) != "(Intercept)"]
+```
+`r  paste(paste(names(neg),":", neg,"<br>"), collapse='')`
+
+
+Churn prediction (continued)
+========================================================
+Prediction results by some of the most significant variables
+
+```{r echo=FALSE, cache=TRUE, fig.height=8, fig.width=8}
+#make a data frame for the graph (3 columns: user_intake, user_has_outgoing_calls, user_has_outgoing_sms, user_use_gprs  and churn)
+gmostsig <- cbind(tsmerged[,c('user_intake','user_has_outgoing_calls','user_has_outgoing_sms','user_use_gprs','churn')],predts)
+#in order to display 2 boolean variables on each axis, add columns x=2*a+b and y=2*c+d
+gmostsig$x <- 2*gmostsig$user_has_outgoing_calls + gmostsig$user_has_outgoing_sms
+gmostsig$y <- 2*gmostsig$user_intake + gmostsig$user_use_gprs
+
+#spread the data for x and y (initially boolean variables) for better visibility: add/subtract up to 0.4 from uniform distribution
+randnumbers <- matrix(runif(dim(gmostsig)[1]*2)*0.8-0.4, ncol=2)
+gmostsig$x <- gmostsig$x + randnumbers[,1]
+gmostsig$y <- gmostsig$y + randnumbers[,2]
+
+plot(y~x, data=gmostsig,
+     yaxt = "n",  #a way to not display default values on Y label
+     xaxt = "n",  #a way to not display default values on X label
+     pch=ifelse(predts==1,4,1), 
+     col=ifelse(gmostsig$churn==gmostsig$predts,ifelse(gmostsig$predts==1,"red","green"),"grey"),
+     xlab="", 
+     ylab="", 
+     main="Predition results by some of the most important features")
+legend("topleft", legend=c("x - True positive","x - False positive","o - True negative","o - False negative"), 
+                    col=c("red","grey","green","grey"), pch=19, bty="n", y.intersp=1)
+axis(2,at=c(0,1,2,3),labels=c("No user intake or gprs", "gprs", "user intake", "User intake and gprs")) #adding y label values
+axis(1,at=c(0,1,2,3),labels=c("No out calls or SMS", "SMS", "Out calls", "Out calls and SMS")) #adding y label values
+
+```
+
+Thank you!
+========================================================
+
+
+
+ 
+  
